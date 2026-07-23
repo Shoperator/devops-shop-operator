@@ -1,0 +1,108 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - discordchannels
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - discordchannels/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - discordchannels/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - shops
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - shops/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - shops/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - wallets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - wallets/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - wallets/status
+  verbs:
+  - get
+  - patch
+  - update

@@ -1,0 +1,10 @@
+apiVersion: shop.shophub.local/v1
+kind: Shop
+metadata:
+  name: shop-sample
+  namespace: default
+spec:
+  name: Shop sample
+  availability: high
+  walletAddress: "0x742d35Cc6634C0532925a3b844Bc9e7595f42D0B"
+  database: postgresql
