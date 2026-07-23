@@ -17,7 +17,6 @@ spec:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: DiscordChannel is the Schema for the discordchannels API
         properties:
           apiVersion:
             description: |-
@@ -37,15 +36,28 @@ spec:
           metadata:
             type: object
           spec:
-            description: DiscordChannelSpec defines the desired state of DiscordChannel
             properties:
-              foo:
-                description: Foo is an example field of DiscordChannel. Edit discordchannel_types.go
-                  to remove/update
+              botTokenSecretRef:
+                description: Discord bot token (stored as secret reference)
                 type: string
+              channelName:
+                description: Channel name
+                type: string
+              serverId:
+                description: Discord server ID
+                type: string
+            required:
+            - channelName
+            - serverId
             type: object
           status:
-            description: DiscordChannelStatus defines the observed state of DiscordChannel
+            properties:
+              channelId:
+                description: Discord channel ID
+                type: string
+              status:
+                description: 'Status: "Configured", "Failed"'
+                type: string
             type: object
         type: object
     served: true

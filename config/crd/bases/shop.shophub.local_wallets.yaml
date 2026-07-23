@@ -17,7 +17,6 @@ spec:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: Wallet is the Schema for the wallets API
         properties:
           apiVersion:
             description: |-
@@ -37,15 +36,28 @@ spec:
           metadata:
             type: object
           spec:
-            description: WalletSpec defines the desired state of Wallet
             properties:
-              foo:
-                description: Foo is an example field of Wallet. Edit wallet_types.go
-                  to remove/update
+              address:
+                description: Wallet address
                 type: string
+              network:
+                description: 'Blockchain network: "ethereum", "bitcoin", "polygon"'
+                type: string
+              privateKeySecretRef:
+                description: Private key (stored as secret reference)
+                type: string
+            required:
+            - address
+            - network
             type: object
           status:
-            description: WalletStatus defines the observed state of Wallet
+            properties:
+              balance:
+                description: Balance (if applicable)
+                type: string
+              status:
+                description: 'Status: "Active", "Invalid"'
+                type: string
             type: object
         type: object
     served: true

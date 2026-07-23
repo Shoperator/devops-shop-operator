@@ -1,19 +1,3 @@
-/*
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
@@ -33,24 +17,30 @@ type WalletReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=shop.shophub.local,resources=wallets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=shop.shophub.local,resources=wallets/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=shop.shophub.local,resources=wallets/finalizers,verbs=update
+//+kubebuilder:rbac:groups=shop.shophub.local,resources=wallets,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=shop.shophub.local,resources=wallets/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=shop.shophub.local,resources=wallets/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Wallet object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.18.2/pkg/reconcile
 func (r *WalletReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	log := log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// Fetch the Wallet resource
+	wallet := &shopv1.Wallet{}
+	if err := r.Get(ctx, req.NamespacedName, wallet); err != nil {
+		log.Error(err, "unable to fetch Wallet")
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
+	// Mark wallet as active (placeholder - kasnije se konetkuje na blockchain)
+	wallet.Status.Status = "Active"
+	wallet.Status.Balance = "0"
+
+	if err := r.Status().Update(ctx, wallet); err != nil {
+		log.Error(err, "unable to update Wallet status")
+		return ctrl.Result{}, err
+	}
+
+	log.Info("Successfully reconciled Wallet", "Wallet", wallet.Name)
 	return ctrl.Result{}, nil
 }
 
