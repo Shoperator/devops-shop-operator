@@ -24,6 +24,10 @@ type ShopSpec struct {
 	// +kubebuilder:validation:Enum=postgresql;redis
 	// +kubebuilder:validation:Required
 	Database string `json:"database"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="nginx:1.24"
+	Image string `json:"image,omitempty"`
 }
 
 // ShopStatus defines the observed state of Shop

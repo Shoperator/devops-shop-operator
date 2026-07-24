@@ -67,6 +67,9 @@ spec:
                 - postgresql
                 - redis
                 type: string
+              image:
+                default: nginx:1.24
+                type: string
               name:
                 description: Name of the shop
                 minLength: 1

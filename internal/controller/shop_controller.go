@@ -37,11 +37,15 @@ type ShopReconciler struct {
 func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	// Fetch the Shop resource
+	// Fetch the Shop resource PRVO
 	shop := &shopv1.Shop{}
 	if err := r.Get(ctx, req.NamespacedName, shop); err != nil {
 		log.Error(err, "unable to fetch Shop")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if shop.Spec.Image == "" {
+		shop.Spec.Image = "nginx:1.24" // Default
 	}
 
 	// Determine number of replicas based on availability
@@ -112,14 +116,16 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		log.Info("Created new Service", "Service", serviceName)
 	}
 
-	// Update Shop status
-	shop.Status.Status = "Running"
-	shop.Status.Replicas = replicas
-	shop.Status.URL = fmt.Sprintf("http://%s-service.%s.svc.cluster.local", shop.Name, shop.Namespace)
-
-	if err := r.Status().Update(ctx, shop); err != nil {
-		log.Error(err, "unable to update Shop status")
-		return ctrl.Result{}, err
+	desiredURL := fmt.Sprintf("http://%s-service.%s.svc.cluster.local", shop.Name, shop.Namespace)
+	if shop.Status.Status != "Running" || shop.Status.Replicas != replicas || shop.Status.URL != desiredURL {
+		shop.Status.Status = "Running"
+		shop.Status.Replicas = replicas
+		shop.Status.URL = desiredURL
+		if err := r.Status().Update(ctx, shop); err != nil {
+			log.Error(err, "unable to update Shop status")
+			return ctrl.Result{}, err
+		}
+		log.Info("Updated Shop status", "Shop", shop.Name)
 	}
 
 	log.Info("Successfully reconciled Shop", "Shop", shop.Name)
@@ -150,7 +156,7 @@ func constructDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
 					Containers: []corev1.Container{
 						{
 							Name:  "shop",
-							Image: "nginx:latest",
+							Image: shop.Spec.Image,
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: 80,

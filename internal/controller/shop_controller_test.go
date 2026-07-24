@@ -51,7 +51,13 @@ var _ = Describe("Shop Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: shopv1.ShopSpec{
+						Name:          "Test Shop",
+						Availability:  "standard",
+						WalletAddress: "0x0000000000000000000000000000000000000000",
+						Database:      "postgresql",
+						Image:         "nginx:1.24",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
