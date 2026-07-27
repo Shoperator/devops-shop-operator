@@ -1,0 +1,104 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.15.0
+  name: shops.shop.shophub.local
+spec:
+  group: shop.shophub.local
+  names:
+    kind: Shop
+    listKind: ShopList
+    plural: shops
+    singular: shop
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Name
+      type: string
+    - jsonPath: .spec.availability
+      name: Availability
+      type: string
+    - jsonPath: .status.status
+      name: Status
+      type: string
+    - jsonPath: .status.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .status.url
+      name: URL
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Shop is the Schema for the shops API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ShopSpec defines the desired state of Shop
+            properties:
+              availability:
+                description: 'Availability: "standard" (2 replicas) or "high" (3 replicas)'
+                enum:
+                - standard
+                - high
+                type: string
+              database:
+                description: 'Database type: "postgresql" or "redis"'
+                enum:
+                - postgresql
+                - redis
+                type: string
+              image:
+                default: nginx:1.24
+                type: string
+              name:
+                description: Name of the shop
+                minLength: 1
+                type: string
+              walletAddress:
+                description: Wallet address for payments
+                type: string
+            required:
+            - availability
+            - database
+            - name
+            - walletAddress
+            type: object
+          status:
+            description: ShopStatus defines the observed state of Shop
+            properties:
+              replicas:
+                description: Number of replicas
+                format: int32
+                type: integer
+              status:
+                description: 'Status of the deployment: "Pending", "Running", "Failed"'
+                type: string
+              url:
+                description: URL where the shop is accessible
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

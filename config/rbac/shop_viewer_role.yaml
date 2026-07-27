@@ -1,0 +1,23 @@
+# permissions for end users to view shops.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: devops-shop-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: shop-viewer-role
+rules:
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - shops
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - shop.shophub.local
+  resources:
+  - shops/status
+  verbs:
+  - get
