@@ -18,7 +18,8 @@ import (
 	shopv1 "github.com/slepimis120/devops-shop-operator/api/v1"
 )
 
-const shopFinalizerName = "shop.shophub.local/finalizer"
+// shopFinalizerName is the finalizer used for Shop resources.
+// const shopFinalizerName = "shop.shophub.local/finalizer"
 
 // ShopReconciler reconciles a Shop object
 type ShopReconciler struct {
