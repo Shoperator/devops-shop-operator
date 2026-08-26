@@ -6,6 +6,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,6 +33,7 @@ type ShopReconciler struct {
 //+kubebuilder:rbac:groups=shop.shophub.local,resources=shops/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -117,7 +119,32 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		log.Info("Created new Service", "Service", serviceName)
 	}
 
-	desiredURL := fmt.Sprintf("http://%s-service.%s.svc.cluster.local", shop.Name, shop.Namespace)
+	// Create Ingress
+	ingress := &networkingv1.Ingress{}
+	ingressName := types.NamespacedName{
+		Name:      fmt.Sprintf("%s-ingress", shop.Name),
+		Namespace: shop.Namespace,
+	}
+	err = r.Get(ctx, ingressName, ingress)
+	if err != nil && client.IgnoreNotFound(err) != nil {
+		log.Error(err, "unable to fetch Ingress")
+		return ctrl.Result{}, err
+	}
+	if err != nil {
+		ingress = constructIngress(shop)
+		if err := controllerutil.SetControllerReference(shop, ingress, r.Scheme); err != nil {
+			log.Error(err, "unable to set owner reference on new Ingress")
+			return ctrl.Result{}, err
+		}
+		if err := r.Create(ctx, ingress); err != nil {
+			log.Error(err, "unable to create new Ingress", "Ingress", ingress)
+			return ctrl.Result{}, err
+		}
+		log.Info("Created new Ingress", "Ingress", ingressName)
+	}
+
+	desiredURL := fmt.Sprintf("http://%s.shop.local", shop.Name)
+
 	if shop.Status.Status != "Running" || shop.Status.Replicas != replicas || shop.Status.URL != desiredURL {
 		shop.Status.Status = "Running"
 		shop.Status.Replicas = replicas
@@ -185,6 +212,37 @@ func constructDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
 	}
 }
 
+func constructIngress(shop *shopv1.Shop) *networkingv1.Ingress {
+	pathType := networkingv1.PathTypePrefix
+	ingressClass := "nginx"
+	return &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-ingress", shop.Name),
+			Namespace: shop.Namespace,
+		},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: &ingressClass,
+			Rules: []networkingv1.IngressRule{{
+				Host: fmt.Sprintf("%s.shop.local", shop.Name),
+				IngressRuleValue: networkingv1.IngressRuleValue{
+					HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: []networkingv1.HTTPIngressPath{{
+							Path:     "/",
+							PathType: &pathType,
+							Backend: networkingv1.IngressBackend{
+								Service: &networkingv1.IngressServiceBackend{
+									Name: fmt.Sprintf("%s-service", shop.Name),
+									Port: networkingv1.ServiceBackendPort{Number: 80},
+								},
+							},
+						}},
+					},
+				},
+			}},
+		},
+	}
+}
+
 // constructService constructs a Service for the given Shop
 func constructService(shop *shopv1.Shop) *corev1.Service {
 	return &corev1.Service{
@@ -213,5 +271,6 @@ func (r *ShopReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&shopv1.Shop{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Owns(&networkingv1.Ingress{}).
 		Complete(r)
 }
