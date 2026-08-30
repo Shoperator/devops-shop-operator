@@ -7,8 +7,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	intstr "k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -34,6 +37,7 @@ type ShopReconciler struct {
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -45,6 +49,11 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.Get(ctx, req.NamespacedName, shop); err != nil {
 		log.Error(err, "unable to fetch Shop")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if err := r.reconcileDatabase(ctx, shop); err != nil {
+		log.Error(err, "unable to reconcile database")
+		return ctrl.Result{}, err
 	}
 
 	if shop.Spec.Image == "" {
@@ -162,6 +171,22 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 // constructDeployment constructs a Deployment for the given Shop
 func constructDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
+	env := []corev1.EnvVar{
+		{Name: "SHOP_NAME", Value: shop.Spec.Name},
+		{Name: "WALLET_ADDRESS", Value: shop.Spec.WalletAddress},
+		{Name: "DATABASE_TYPE", Value: shop.Spec.Database},
+	}
+	if shop.Spec.Database == "postgresql" {
+		s := fmt.Sprintf("%s-db-app", shop.Name) // CNPG pravi ovaj Secret
+		env = append(env,
+			corev1.EnvVar{Name: "DB_HOST", ValueFrom: secretKeyRef(s, "host")},
+			corev1.EnvVar{Name: "DB_PORT", ValueFrom: secretKeyRef(s, "port")},
+			corev1.EnvVar{Name: "DB_USERNAME", ValueFrom: secretKeyRef(s, "username")},
+			corev1.EnvVar{Name: "DB_PASSWORD", ValueFrom: secretKeyRef(s, "password")},
+			corev1.EnvVar{Name: "DB_NAME", ValueFrom: secretKeyRef(s, "dbname")},
+		)
+	}
+
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-deployment", shop.Name),
@@ -170,15 +195,11 @@ func constructDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"app": shop.Name,
-				},
+				MatchLabels: map[string]string{"app": shop.Name},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"app": shop.Name,
-					},
+					Labels: map[string]string{"app": shop.Name},
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
@@ -186,24 +207,9 @@ func constructDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
 							Name:  "shop",
 							Image: shop.Spec.Image,
 							Ports: []corev1.ContainerPort{
-								{
-									ContainerPort: 80,
-								},
+								{ContainerPort: 80},
 							},
-							Env: []corev1.EnvVar{
-								{
-									Name:  "SHOP_NAME",
-									Value: shop.Spec.Name,
-								},
-								{
-									Name:  "WALLET_ADDRESS",
-									Value: shop.Spec.WalletAddress,
-								},
-								{
-									Name:  "DATABASE_TYPE",
-									Value: shop.Spec.Database,
-								},
-							},
+							Env: env,
 						},
 					},
 				},
@@ -273,4 +279,53 @@ func (r *ShopReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.Ingress{}).
 		Complete(r)
+}
+
+func (r *ShopReconciler) reconcileDatabase(ctx context.Context, shop *shopv1.Shop) error {
+	logger := log.FromContext(ctx)
+	if shop.Spec.Database != "postgresql" {
+		return nil // redis/ostalo: nema operatora, skip
+	}
+	name := fmt.Sprintf("%s-db", shop.Name)
+	cluster := &unstructured.Unstructured{}
+	cluster.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "postgresql.cnpg.io", Version: "v1", Kind: "Cluster",
+	})
+	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: shop.Namespace}, cluster)
+	if err == nil {
+		return nil // već postoji
+	}
+	if meta.IsNoMatchError(err) {
+		logger.Info("CNPG CRD nije instaliran u klasteru, preskačem DB provisioning", "shop", shop.Name)
+		return nil
+	}
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	cluster.SetName(name)
+	cluster.SetNamespace(shop.Namespace)
+	cluster.Object["spec"] = map[string]interface{}{
+		"instances": int64(1),
+		"storage":   map[string]interface{}{"size": "1Gi"},
+	}
+	if err := controllerutil.SetControllerReference(shop, cluster, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.Create(ctx, cluster); err != nil {
+		if meta.IsNoMatchError(err) {
+			logger.Info("CNPG CRD nije instaliran, preskačem DB provisioning", "shop", shop.Name)
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func secretKeyRef(secret, key string) *corev1.EnvVarSource {
+	return &corev1.EnvVarSource{
+		SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secret},
+			Key:                  key,
+		},
+	}
 }
