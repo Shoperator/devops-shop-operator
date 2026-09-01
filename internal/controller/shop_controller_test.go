@@ -56,7 +56,8 @@ var _ = Describe("Shop Controller", func() {
 						Availability:  "standard",
 						WalletAddress: "0x0000000000000000000000000000000000000000",
 						Database:      "postgresql",
-						Image:         "nginx:1.24",
+						BackendImage:  "slepimis120/devops-shop-backend:0.1.0",
+						FrontendImage: "slepimis120/devops-shop-frontend:0.1.0",
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())

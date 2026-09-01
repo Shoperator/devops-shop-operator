@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -22,9 +24,6 @@ import (
 	shopv1 "github.com/slepimis120/devops-shop-operator/api/v1"
 )
 
-// shopFinalizerName is the finalizer used for Shop resources.
-// const shopFinalizerName = "shop.shophub.local/finalizer"
-
 // ShopReconciler reconciles a Shop object
 type ShopReconciler struct {
 	client.Client
@@ -36,267 +35,114 @@ type ShopReconciler struct {
 //+kubebuilder:rbac:groups=shop.shophub.local,resources=shops/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;update;patch;delete
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
 func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
-	// Fetch the Shop resource PRVO
 	shop := &shopv1.Shop{}
 	if err := r.Get(ctx, req.NamespacedName, shop); err != nil {
-		log.Error(err, "unable to fetch Shop")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if err := r.reconcileDatabase(ctx, shop); err != nil {
-		log.Error(err, "unable to reconcile database")
-		return ctrl.Result{}, err
-	}
-
-	if shop.Spec.Image == "" {
-		shop.Spec.Image = "nginx:1.24" // Default
-	}
-
-	// Determine number of replicas based on availability
 	var replicas int32 = 2
 	if shop.Spec.Availability == "high" {
 		replicas = 3
 	}
 
-	// Create Deployment
-	deployment := &appsv1.Deployment{}
-	deploymentName := types.NamespacedName{
-		Name:      fmt.Sprintf("%s-deployment", shop.Name),
-		Namespace: shop.Namespace,
+	if err := r.reconcileDatabase(ctx, shop); err != nil {
+		logger.Error(err, "unable to reconcile database")
+		return ctrl.Result{}, err
 	}
-
-	err := r.Get(ctx, deploymentName, deployment)
-	if err != nil && client.IgnoreNotFound(err) != nil {
-		log.Error(err, "unable to fetch Deployment")
+	if err := r.reconcileAuthSecret(ctx, shop); err != nil {
+		logger.Error(err, "unable to reconcile auth secret")
 		return ctrl.Result{}, err
 	}
 
-	if err != nil {
-		// Deployment doesn't exist, create it
-		deployment = constructDeployment(shop, replicas)
-		if err := controllerutil.SetControllerReference(shop, deployment, r.Scheme); err != nil {
-			log.Error(err, "unable to set owner reference on new Deployment")
-			return ctrl.Result{}, err
-		}
-		if err := r.Create(ctx, deployment); err != nil {
-			log.Error(err, "unable to create new Deployment", "Deployment", deployment)
-			return ctrl.Result{}, err
-		}
-		log.Info("Created new Deployment", "Deployment", deploymentName)
-	} else {
-		// Deployment exists, update if needed
-		deployment.Spec.Replicas = &replicas
-		if err := r.Update(ctx, deployment); err != nil {
-			log.Error(err, "unable to update Deployment", "Deployment", deploymentName)
-			return ctrl.Result{}, err
-		}
-		log.Info("Updated Deployment replicas", "Replicas", replicas)
-	}
-
-	// Create Service
-	service := &corev1.Service{}
-	serviceName := types.NamespacedName{
-		Name:      fmt.Sprintf("%s-service", shop.Name),
-		Namespace: shop.Namespace,
-	}
-
-	err = r.Get(ctx, serviceName, service)
-	if err != nil && client.IgnoreNotFound(err) != nil {
-		log.Error(err, "unable to fetch Service")
+	// backend
+	if err := r.ensureDeployment(ctx, shop, constructBackendDeployment(shop, replicas), replicas); err != nil {
 		return ctrl.Result{}, err
 	}
-
-	if err != nil {
-		// Service doesn't exist, create it
-		service = constructService(shop)
-		if err := controllerutil.SetControllerReference(shop, service, r.Scheme); err != nil {
-			log.Error(err, "unable to set owner reference on new Service")
-			return ctrl.Result{}, err
-		}
-		if err := r.Create(ctx, service); err != nil {
-			log.Error(err, "unable to create new Service", "Service", service)
-			return ctrl.Result{}, err
-		}
-		log.Info("Created new Service", "Service", serviceName)
-	}
-
-	// Create Ingress
-	ingress := &networkingv1.Ingress{}
-	ingressName := types.NamespacedName{
-		Name:      fmt.Sprintf("%s-ingress", shop.Name),
-		Namespace: shop.Namespace,
-	}
-	err = r.Get(ctx, ingressName, ingress)
-	if err != nil && client.IgnoreNotFound(err) != nil {
-		log.Error(err, "unable to fetch Ingress")
+	if err := r.ensureCreated(ctx, shop, constructService(shop, "backend")); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err != nil {
-		ingress = constructIngress(shop)
-		if err := controllerutil.SetControllerReference(shop, ingress, r.Scheme); err != nil {
-			log.Error(err, "unable to set owner reference on new Ingress")
-			return ctrl.Result{}, err
-		}
-		if err := r.Create(ctx, ingress); err != nil {
-			log.Error(err, "unable to create new Ingress", "Ingress", ingress)
-			return ctrl.Result{}, err
-		}
-		log.Info("Created new Ingress", "Ingress", ingressName)
+	// frontend
+	if err := r.ensureDeployment(ctx, shop, constructFrontendDeployment(shop, replicas), replicas); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.ensureCreated(ctx, shop, constructService(shop, "frontend")); err != nil {
+		return ctrl.Result{}, err
+	}
+	// ingress
+	if err := r.ensureCreated(ctx, shop, constructIngress(shop)); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	desiredURL := fmt.Sprintf("http://%s.shop.local", shop.Name)
-
 	if shop.Status.Status != "Running" || shop.Status.Replicas != replicas || shop.Status.URL != desiredURL {
 		shop.Status.Status = "Running"
 		shop.Status.Replicas = replicas
 		shop.Status.URL = desiredURL
 		if err := r.Status().Update(ctx, shop); err != nil {
-			log.Error(err, "unable to update Shop status")
 			return ctrl.Result{}, err
 		}
-		log.Info("Updated Shop status", "Shop", shop.Name)
 	}
-
-	log.Info("Successfully reconciled Shop", "Shop", shop.Name)
+	logger.Info("Successfully reconciled Shop", "Shop", shop.Name)
 	return ctrl.Result{}, nil
 }
 
-// constructDeployment constructs a Deployment for the given Shop
-func constructDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
-	env := []corev1.EnvVar{
-		{Name: "SHOP_NAME", Value: shop.Spec.Name},
-		{Name: "WALLET_ADDRESS", Value: shop.Spec.WalletAddress},
-		{Name: "DATABASE_TYPE", Value: shop.Spec.Database},
-	}
-	if shop.Spec.Database == "postgresql" {
-		s := fmt.Sprintf("%s-db-app", shop.Name) // CNPG pravi ovaj Secret
-		env = append(env,
-			corev1.EnvVar{Name: "DB_HOST", ValueFrom: secretKeyRef(s, "host")},
-			corev1.EnvVar{Name: "DB_PORT", ValueFrom: secretKeyRef(s, "port")},
-			corev1.EnvVar{Name: "DB_USERNAME", ValueFrom: secretKeyRef(s, "username")},
-			corev1.EnvVar{Name: "DB_PASSWORD", ValueFrom: secretKeyRef(s, "password")},
-			corev1.EnvVar{Name: "DB_NAME", ValueFrom: secretKeyRef(s, "dbname")},
-		)
-	}
+// ---- helpers ----
 
-	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-deployment", shop.Name),
-			Namespace: shop.Namespace,
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": shop.Name},
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{"app": shop.Name},
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "shop",
-							Image: shop.Spec.Image,
-							Ports: []corev1.ContainerPort{
-								{ContainerPort: 80},
-							},
-							Env: env,
-						},
-					},
-				},
-			},
-		},
+func (r *ShopReconciler) ensureCreated(ctx context.Context, shop *shopv1.Shop, obj client.Object) error {
+	check := obj.DeepCopyObject().(client.Object)
+	err := r.Get(ctx, client.ObjectKeyFromObject(obj), check)
+	if err == nil {
+		return nil
 	}
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	if err := controllerutil.SetControllerReference(shop, obj, r.Scheme); err != nil {
+		return err
+	}
+	return r.Create(ctx, obj)
 }
 
-func constructIngress(shop *shopv1.Shop) *networkingv1.Ingress {
-	pathType := networkingv1.PathTypePrefix
-	ingressClass := "nginx"
-	return &networkingv1.Ingress{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-ingress", shop.Name),
-			Namespace: shop.Namespace,
-		},
-		Spec: networkingv1.IngressSpec{
-			IngressClassName: &ingressClass,
-			Rules: []networkingv1.IngressRule{{
-				Host: fmt.Sprintf("%s.shop.local", shop.Name),
-				IngressRuleValue: networkingv1.IngressRuleValue{
-					HTTP: &networkingv1.HTTPIngressRuleValue{
-						Paths: []networkingv1.HTTPIngressPath{{
-							Path:     "/",
-							PathType: &pathType,
-							Backend: networkingv1.IngressBackend{
-								Service: &networkingv1.IngressServiceBackend{
-									Name: fmt.Sprintf("%s-service", shop.Name),
-									Port: networkingv1.ServiceBackendPort{Number: 80},
-								},
-							},
-						}},
-					},
-				},
-			}},
-		},
+func (r *ShopReconciler) ensureDeployment(ctx context.Context, shop *shopv1.Shop, desired *appsv1.Deployment, replicas int32) error {
+	found := &appsv1.Deployment{}
+	err := r.Get(ctx, client.ObjectKeyFromObject(desired), found)
+	if err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return err
+		}
+		if err := controllerutil.SetControllerReference(shop, desired, r.Scheme); err != nil {
+			return err
+		}
+		return r.Create(ctx, desired)
 	}
-}
-
-// constructService constructs a Service for the given Shop
-func constructService(shop *shopv1.Shop) *corev1.Service {
-	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-service", shop.Name),
-			Namespace: shop.Namespace,
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{
-				"app": shop.Name,
-			},
-			Ports: []corev1.ServicePort{
-				{
-					Port:       80,
-					TargetPort: intstr.FromInt(80),
-				},
-			},
-			Type: corev1.ServiceTypeClusterIP,
-		},
+	if found.Spec.Replicas == nil || *found.Spec.Replicas != replicas {
+		found.Spec.Replicas = &replicas
+		return r.Update(ctx, found)
 	}
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *ShopReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&shopv1.Shop{}).
-		Owns(&appsv1.Deployment{}).
-		Owns(&corev1.Service{}).
-		Owns(&networkingv1.Ingress{}).
-		Complete(r)
+	return nil
 }
 
 func (r *ShopReconciler) reconcileDatabase(ctx context.Context, shop *shopv1.Shop) error {
 	logger := log.FromContext(ctx)
 	if shop.Spec.Database != "postgresql" {
-		return nil // redis/ostalo: nema operatora, skip
+		return nil
 	}
 	name := fmt.Sprintf("%s-db", shop.Name)
 	cluster := &unstructured.Unstructured{}
-	cluster.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "postgresql.cnpg.io", Version: "v1", Kind: "Cluster",
-	})
+	cluster.SetGroupVersionKind(schema.GroupVersionKind{Group: "postgresql.cnpg.io", Version: "v1", Kind: "Cluster"})
 	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: shop.Namespace}, cluster)
 	if err == nil {
-		return nil // već postoji
+		return nil
 	}
 	if meta.IsNoMatchError(err) {
-		logger.Info("CNPG CRD nije instaliran u klasteru, preskačem DB provisioning", "shop", shop.Name)
+		logger.Info("CNPG CRD nije instaliran, preskačem DB provisioning", "shop", shop.Name)
 		return nil
 	}
 	if client.IgnoreNotFound(err) != nil {
@@ -313,12 +159,41 @@ func (r *ShopReconciler) reconcileDatabase(ctx context.Context, shop *shopv1.Sho
 	}
 	if err := r.Create(ctx, cluster); err != nil {
 		if meta.IsNoMatchError(err) {
-			logger.Info("CNPG CRD nije instaliran, preskačem DB provisioning", "shop", shop.Name)
 			return nil
 		}
 		return err
 	}
 	return nil
+}
+
+func (r *ShopReconciler) reconcileAuthSecret(ctx context.Context, shop *shopv1.Shop) error {
+	name := fmt.Sprintf("%s-auth", shop.Name)
+	existing := &corev1.Secret{}
+	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: shop.Namespace}, existing)
+	if err == nil {
+		return nil
+	}
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: shop.Namespace},
+		Type:       corev1.SecretTypeOpaque,
+		StringData: map[string]string{
+			"JWT_SECRET":          randString(32),
+			"SHOP_ADMIN_PASSWORD": randString(16),
+		},
+	}
+	if err := controllerutil.SetControllerReference(shop, secret, r.Scheme); err != nil {
+		return err
+	}
+	return r.Create(ctx, secret)
+}
+
+func randString(n int) string {
+	b := make([]byte, n)
+	_, _ = crand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func secretKeyRef(secret, key string) *corev1.EnvVarSource {
@@ -328,4 +203,114 @@ func secretKeyRef(secret, key string) *corev1.EnvVarSource {
 			Key:                  key,
 		},
 	}
+}
+
+// ---- construct ----
+
+func deploymentFor(shop *shopv1.Shop, name, image string, replicas int32, labels map[string]string, env []corev1.EnvVar) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: shop.Namespace},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "app",
+						Image: image,
+						Ports: []corev1.ContainerPort{{ContainerPort: 3000}},
+						Env:   env,
+					}},
+				},
+			},
+		},
+	}
+}
+
+func constructBackendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
+	name := fmt.Sprintf("%s-backend", shop.Name)
+	auth := fmt.Sprintf("%s-auth", shop.Name)
+	env := []corev1.EnvVar{
+		{Name: "PORT", Value: "3000"},
+		{Name: "WALLET_ADDRESS", Value: shop.Spec.WalletAddress},
+		{Name: "SHOP_ADMIN_USERNAME", Value: shop.Spec.AdminUsername},
+		{Name: "SHOP_ADMIN_PASSWORD", ValueFrom: secretKeyRef(auth, "SHOP_ADMIN_PASSWORD")},
+		{Name: "JWT_SECRET", ValueFrom: secretKeyRef(auth, "JWT_SECRET")},
+	}
+	if shop.Spec.Database == "postgresql" {
+		s := fmt.Sprintf("%s-db-app", shop.Name)
+		env = append(env,
+			corev1.EnvVar{Name: "DB_HOST", ValueFrom: secretKeyRef(s, "host")},
+			corev1.EnvVar{Name: "DB_PORT", ValueFrom: secretKeyRef(s, "port")},
+			corev1.EnvVar{Name: "DB_USERNAME", ValueFrom: secretKeyRef(s, "username")},
+			corev1.EnvVar{Name: "DB_PASSWORD", ValueFrom: secretKeyRef(s, "password")},
+			corev1.EnvVar{Name: "DB_NAME", ValueFrom: secretKeyRef(s, "dbname")},
+		)
+	}
+	return deploymentFor(shop, name, shop.Spec.BackendImage, replicas, map[string]string{"app": name}, env)
+}
+
+func constructFrontendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
+	name := fmt.Sprintf("%s-frontend", shop.Name)
+	env := []corev1.EnvVar{
+		{Name: "PORT", Value: "3000"},
+		{Name: "HOSTNAME", Value: "0.0.0.0"},
+		{Name: "NEXT_PUBLIC_API_URL", Value: fmt.Sprintf("http://%s.shop.local", shop.Name)},
+		{Name: "NEXT_PUBLIC_SHOP_NAME", Value: shop.Spec.Name},
+	}
+	return deploymentFor(shop, name, shop.Spec.FrontendImage, replicas, map[string]string{"app": name}, env)
+}
+
+func constructService(shop *shopv1.Shop, component string) *corev1.Service {
+	name := fmt.Sprintf("%s-%s", shop.Name, component)
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: shop.Namespace},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{"app": name},
+			Ports:    []corev1.ServicePort{{Port: 3000, TargetPort: intstr.FromInt(3000)}},
+			Type:     corev1.ServiceTypeClusterIP,
+		},
+	}
+}
+
+func ingressBackend(svc string, port int32) networkingv1.IngressBackend {
+	return networkingv1.IngressBackend{
+		Service: &networkingv1.IngressServiceBackend{
+			Name: svc,
+			Port: networkingv1.ServiceBackendPort{Number: port},
+		},
+	}
+}
+
+func constructIngress(shop *shopv1.Shop) *networkingv1.Ingress {
+	pathType := networkingv1.PathTypePrefix
+	ingressClass := "nginx"
+	return &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-ingress", shop.Name), Namespace: shop.Namespace},
+		Spec: networkingv1.IngressSpec{
+			IngressClassName: &ingressClass,
+			Rules: []networkingv1.IngressRule{{
+				Host: fmt.Sprintf("%s.shop.local", shop.Name),
+				IngressRuleValue: networkingv1.IngressRuleValue{
+					HTTP: &networkingv1.HTTPIngressRuleValue{
+						Paths: []networkingv1.HTTPIngressPath{
+							{Path: "/api", PathType: &pathType, Backend: ingressBackend(fmt.Sprintf("%s-backend", shop.Name), 3000)},
+							{Path: "/", PathType: &pathType, Backend: ingressBackend(fmt.Sprintf("%s-frontend", shop.Name), 3000)},
+						},
+					},
+				},
+			}},
+		},
+	}
+}
+
+func (r *ShopReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&shopv1.Shop{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
+		Owns(&corev1.Secret{}).
+		Owns(&networkingv1.Ingress{}).
+		Complete(r)
 }

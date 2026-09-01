@@ -55,11 +55,19 @@ spec:
           spec:
             description: ShopSpec defines the desired state of Shop
             properties:
+              adminUsername:
+                default: admin
+                description: Admin username seeded in the shop backend
+                type: string
               availability:
                 description: 'Availability: "standard" (2 replicas) or "high" (3 replicas)'
                 enum:
                 - standard
                 - high
+                type: string
+              backendImage:
+                default: slepimis120/devops-shop-backend:0.1.0
+                description: Container image for the shop backend (NestJS)
                 type: string
               database:
                 description: 'Database type: "postgresql" or "redis"'
@@ -67,8 +75,9 @@ spec:
                 - postgresql
                 - redis
                 type: string
-              image:
-                default: nginx:1.24
+              frontendImage:
+                default: slepimis120/devops-shop-frontend:0.1.0
+                description: Container image for the shop frontend (Next.js)
                 type: string
               name:
                 description: Name of the shop
