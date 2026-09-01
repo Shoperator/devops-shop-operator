@@ -25,9 +25,20 @@ type ShopSpec struct {
 	// +kubebuilder:validation:Required
 	Database string `json:"database"`
 
+	// Container image for the shop backend (NestJS)
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default="nginx:1.24"
-	Image string `json:"image,omitempty"`
+	// +kubebuilder:default="slepimis120/devops-shop-backend:0.1.0"
+	BackendImage string `json:"backendImage,omitempty"`
+
+	// Container image for the shop frontend (Next.js)
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="slepimis120/devops-shop-frontend:0.1.0"
+	FrontendImage string `json:"frontendImage,omitempty"`
+
+	// Admin username seeded in the shop backend
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="admin"
+	AdminUsername string `json:"adminUsername,omitempty"`
 }
 
 // ShopStatus defines the observed state of Shop
