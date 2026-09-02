@@ -5,26 +5,32 @@ import (
 )
 
 type WalletSpec struct {
-	// Wallet address
-	Address string `json:"address"`
-
-	// Blockchain network: "ethereum", "bitcoin", "polygon"
-	Network string `json:"network"`
-
-	// Private key (stored as secret reference)
-	PrivateKeySecretRef string `json:"privateKeySecretRef,omitempty"`
+	// Blockchain network. EVM networks (ethereum, polygon) share the same
+	// secp256k1/keccak address format; bitcoin is not supported for generation yet.
+	// +kubebuilder:validation:Enum=ethereum;polygon;bitcoin
+	// +kubebuilder:default=ethereum
+	Network string `json:"network,omitempty"`
 }
 
 type WalletStatus struct {
-	// Status: "Active", "Invalid"
-	Status string `json:"status,omitempty"`
+	// Phase: "Active" (keypair generated) or "Unsupported" (network).
+	Phase string `json:"phase,omitempty"`
 
-	// Balance (if applicable)
+	// Generated public wallet address.
+	Address string `json:"address,omitempty"`
+
+	// Name of the Secret holding the private key (`<name>-wallet`).
+	SecretRef string `json:"secretRef,omitempty"`
+
+	// Balance (placeholder until an on-chain lookup is wired in).
 	Balance string `json:"balance,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:printcolumn:name="Network",type=string,JSONPath=`.spec.network`
+//+kubebuilder:printcolumn:name="Address",type=string,JSONPath=`.status.address`
+//+kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 
 type Wallet struct {
 	metav1.TypeMeta   `json:",inline"`

@@ -14,7 +14,17 @@ spec:
     singular: wallet
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.network
+      name: Network
+      type: string
+    - jsonPath: .status.address
+      name: Address
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1
     schema:
       openAPIV3Schema:
         properties:
@@ -37,26 +47,32 @@ spec:
             type: object
           spec:
             properties:
-              address:
-                description: Wallet address
-                type: string
               network:
-                description: 'Blockchain network: "ethereum", "bitcoin", "polygon"'
+                default: ethereum
+                description: |-
+                  Blockchain network. EVM networks (ethereum, polygon) share the same
+                  secp256k1/keccak address format; bitcoin is not supported for generation yet.
+                enum:
+                - ethereum
+                - polygon
+                - bitcoin
                 type: string
-              privateKeySecretRef:
-                description: Private key (stored as secret reference)
-                type: string
-            required:
-            - address
-            - network
             type: object
           status:
             properties:
-              balance:
-                description: Balance (if applicable)
+              address:
+                description: Generated public wallet address.
                 type: string
-              status:
-                description: 'Status: "Active", "Invalid"'
+              balance:
+                description: Balance (placeholder until an on-chain lookup is wired
+                  in).
+                type: string
+              phase:
+                description: 'Phase: "Active" (keypair generated) or "Unsupported"
+                  (network).'
+                type: string
+              secretRef:
+                description: Name of the Secret holding the private key (`<name>-wallet`).
                 type: string
             type: object
         type: object
