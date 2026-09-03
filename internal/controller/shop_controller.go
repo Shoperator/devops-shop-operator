@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -110,6 +111,14 @@ func (r *ShopReconciler) ensureCreated(ctx context.Context, shop *shopv1.Shop, o
 	return r.Create(ctx, obj)
 }
 
+// ensureDeployment creates the Deployment, or brings a running one back in line
+// with the Shop it belongs to.
+//
+// Only the three things the Shop's spec actually feeds are compared and copied:
+// the replica count, the image, and the environment. Replacing the whole pod
+// template instead would fight the defaults the API server fills in — they are
+// absent from the desired template, so every comparison would differ and every
+// reconcile would write again.
 func (r *ShopReconciler) ensureDeployment(ctx context.Context, shop *shopv1.Shop, desired *appsv1.Deployment, replicas int32) error {
 	found := &appsv1.Deployment{}
 	err := r.Get(ctx, client.ObjectKeyFromObject(desired), found)
@@ -122,11 +131,34 @@ func (r *ShopReconciler) ensureDeployment(ctx context.Context, shop *shopv1.Shop
 		}
 		return r.Create(ctx, desired)
 	}
+
+	if len(found.Spec.Template.Spec.Containers) == 0 || len(desired.Spec.Template.Spec.Containers) == 0 {
+		return fmt.Errorf("deployment %s has no container to reconcile", found.Name)
+	}
+	current := &found.Spec.Template.Spec.Containers[0]
+	wanted := desired.Spec.Template.Spec.Containers[0]
+	changed := false
+
 	if found.Spec.Replicas == nil || *found.Spec.Replicas != replicas {
 		found.Spec.Replicas = &replicas
-		return r.Update(ctx, found)
+		changed = true
 	}
-	return nil
+	if current.Image != wanted.Image {
+		current.Image = wanted.Image
+		changed = true
+	}
+	// The environment carries the wallet address and the admin username, so
+	// this is what makes reconfiguring a shop reach the pods that are running.
+	if !equality.Semantic.DeepEqual(current.Env, wanted.Env) {
+		current.Env = wanted.Env
+		changed = true
+	}
+
+	if !changed {
+		return nil
+	}
+	log.FromContext(ctx).Info("Updating Deployment to match the Shop", "Deployment", found.Name)
+	return r.Update(ctx, found)
 }
 
 func (r *ShopReconciler) reconcileDatabase(ctx context.Context, shop *shopv1.Shop) error {
