@@ -44,6 +44,11 @@ const (
 	redisImage = "quay.io/opstree/redis:v7.0.12"
 
 	redisPort = "6379"
+
+	// appLabel is the label key a shop's pods carry and its Services select
+	// on. The two have to agree or the Service reaches nothing, so it is named
+	// once here rather than spelled out at each end.
+	appLabel = "app"
 )
 
 // ShopReconciler reconciles a Shop object
@@ -429,10 +434,10 @@ func constructBackendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deplo
 			corev1.EnvVar{Name: "REDIS_PORT", Value: redisPort},
 		)
 	}
-	return deploymentFor(shop, name, shop.Spec.BackendImage, replicas, map[string]string{"app": name}, env)
+	return deploymentFor(shop, name, shop.Spec.BackendImage, replicas, map[string]string{appLabel: name}, env)
 }
 
-// constructFrontendDeployment builds the shop's storefront. 
+// constructFrontendDeployment builds the shop's storefront.
 // Note the address of backend is not here.
 //
 // The Ingress publishes both halves of a shop under one host, so the storefront
@@ -445,7 +450,7 @@ func constructFrontendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Depl
 		{Name: "HOSTNAME", Value: "0.0.0.0"},
 		{Name: "NEXT_PUBLIC_SHOP_NAME", Value: shop.Spec.Name},
 	}
-	return deploymentFor(shop, name, shop.Spec.FrontendImage, replicas, map[string]string{"app": name}, env)
+	return deploymentFor(shop, name, shop.Spec.FrontendImage, replicas, map[string]string{appLabel: name}, env)
 }
 
 func constructService(shop *shopv1.Shop, component string) *corev1.Service {
@@ -453,7 +458,7 @@ func constructService(shop *shopv1.Shop, component string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: shop.Namespace},
 		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{"app": name},
+			Selector: map[string]string{appLabel: name},
 			Ports:    []corev1.ServicePort{{Port: 3000, TargetPort: intstr.FromInt(3000)}},
 			Type:     corev1.ServiceTypeClusterIP,
 		},

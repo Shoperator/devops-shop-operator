@@ -1,34 +1,24 @@
-run:
-  timeout: 5m
-  allow-parallel-runners: true
-  modules-download-mode: readonly
+# golangci-lint v2. Migrated from the v1 format with `golangci-lint migrate`,
+# which is what the v7+ action requires: it only runs golangci-lint v2.
+#
+# Two things moved in v2 and are worth knowing when reading this: `gofmt` and
+# `goimports` are formatters now rather than linters, and `staticcheck` absorbed
+# `gosimple` and `stylecheck`, so the ST and QF checks come with it.
+version: "2"
 
-issues:
-  # don't skip warning about doc comments
-  # don't exclude the default set of lint
-  exclude-use-default: false
-  # restore some of the defaults
-  # (fill in the rest as needed)
-  exclude-rules:
-    - path: "api/*"
-      linters:
-        - lll
-    - path: "internal/*"
-      linters:
-        - dupl
-        - lll
+run:
+  modules-download-mode: readonly
+  allow-parallel-runners: true
+
 linters:
-  disable-all: true
+  default: none
   enable:
+    - copyloopvar
     - dupl
     - errcheck
-    - copyloopvar
     - ginkgolinter
     - goconst
     - gocyclo
-    - gofmt
-    - goimports
-    - gosimple
     - govet
     - ineffassign
     - lll
@@ -36,7 +26,45 @@ linters:
     - nakedret
     - prealloc
     - staticcheck
-    - typecheck
     - unconvert
     - unparam
     - unused
+
+  settings:
+    goconst:
+      # Test fixtures repeat a namespace, an image tag and a shop name by
+      # nature; naming each one would make the fixtures harder to read, not
+      # easier.
+      ignore-tests: true
+      # The operator builds CRDs as unstructured maps, so field names like
+      # "storage" recur across manifests that have nothing to do with each
+      # other. Sharing a constant between them would suggest a relationship
+      # that is not there, and the code stops looking like the YAML it mirrors.
+      # Four occurrences is the point where a name is genuinely worth having.
+      min-occurrences: 4
+
+  exclusions:
+    generated: lax
+    rules:
+      - path: "api/*"
+        linters:
+          - lll
+      - path: "internal/*"
+        linters:
+          - dupl
+          - lll
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
