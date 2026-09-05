@@ -30,6 +30,22 @@ import (
 // deployed
 const DefaultBaseDomain = "localhost"
 
+// The two databases a shop can be created with. ShopHub offers them as
+// `standard` and `light`; these are the values that reach the Shop resource,
+// and they are passed to the shop's backend as `DB_KIND` unchanged.
+const (
+	databasePostgres = "postgresql"
+	databaseRedis    = "redis"
+)
+
+const (
+	databaseStorageSize = "1Gi"
+
+	redisImage = "quay.io/opstree/redis:v7.0.12"
+
+	redisPort = "6379"
+)
+
 // ShopReconciler reconciles a Shop object
 type ShopReconciler struct {
 	client.Client
@@ -59,6 +75,7 @@ func (r *ShopReconciler) baseDomain() string {
 //+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=redis.redis.opstreelabs.in,resources=redis,verbs=get;list;watch;create;update;patch;delete
 
 func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -207,41 +224,117 @@ func (r *ShopReconciler) ensureIngress(ctx context.Context, shop *shopv1.Shop, d
 	return r.Update(ctx, found)
 }
 
+// reconcileDatabase provisions the database the shop was created with.
+//
+// Neither database is deployed by this operator directly: each one has an
+// operator of its own, thiswrites the custom resource that
+// operator watches. CNPG turns a Cluster into PostgreSQL; the Redis operator
+// turns a Redis into a Redis instance.
 func (r *ShopReconciler) reconcileDatabase(ctx context.Context, shop *shopv1.Shop) error {
-	logger := log.FromContext(ctx)
-	if shop.Spec.Database != "postgresql" {
+	switch shop.Spec.Database {
+	case databasePostgres:
+		return r.ensureDatabase(ctx, shop, constructPostgresCluster(shop))
+	case databaseRedis:
+		return r.ensureDatabase(ctx, shop, constructRedisInstance(shop))
+	default:
 		return nil
 	}
-	name := fmt.Sprintf("%s-db", shop.Name)
-	cluster := &unstructured.Unstructured{}
-	cluster.SetGroupVersionKind(schema.GroupVersionKind{Group: "postgresql.cnpg.io", Version: "v1", Kind: "Cluster"})
-	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: shop.Namespace}, cluster)
+}
+
+// ensureDatabase creates the custom resource a database operator acts on,
+// unless it is already there.
+//
+// A missing CRD is logged and skipped rather than failing the reconcile: a
+// cluster that has only one of the two database operators installed can still
+// deploy every shop that asked for the other one, and the shop's own pods will
+// wait for their database rather than the whole Shop going unreconciled.
+func (r *ShopReconciler) ensureDatabase(ctx context.Context, shop *shopv1.Shop, desired *unstructured.Unstructured) error {
+	logger := log.FromContext(ctx)
+
+	found := desired.DeepCopy()
+	err := r.Get(ctx, client.ObjectKeyFromObject(desired), found)
 	if err == nil {
 		return nil
 	}
 	if meta.IsNoMatchError(err) {
-		logger.Info("CNPG CRD nije instaliran, preskačem DB provisioning", "shop", shop.Name)
+		logger.Info("database operator is not installed, skipping provisioning",
+			"shop", shop.Name, "kind", desired.GetKind())
 		return nil
 	}
 	if client.IgnoreNotFound(err) != nil {
 		return err
 	}
-	cluster.SetName(name)
-	cluster.SetNamespace(shop.Namespace)
-	cluster.Object["spec"] = map[string]interface{}{
-		"instances": int64(1),
-		"storage":   map[string]interface{}{"size": "1Gi"},
-	}
-	if err := controllerutil.SetControllerReference(shop, cluster, r.Scheme); err != nil {
+
+	if err := controllerutil.SetControllerReference(shop, desired, r.Scheme); err != nil {
 		return err
 	}
-	if err := r.Create(ctx, cluster); err != nil {
+	if err := r.Create(ctx, desired); err != nil {
 		if meta.IsNoMatchError(err) {
 			return nil
 		}
 		return err
 	}
 	return nil
+}
+
+func constructPostgresCluster(shop *shopv1.Shop) *unstructured.Unstructured {
+	cluster := &unstructured.Unstructured{}
+	cluster.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "postgresql.cnpg.io",
+		Version: "v1",
+		Kind:    "Cluster",
+	})
+	cluster.SetName(postgresName(shop))
+	cluster.SetNamespace(shop.Namespace)
+	cluster.Object["spec"] = map[string]interface{}{
+		"instances": int64(1),
+		"storage":   map[string]interface{}{"size": databaseStorageSize},
+	}
+	return cluster
+}
+
+// constructRedisInstance is the `light` database: a standalone Redis from the
+// OT-Container-Kit operator, which serves it on a Service named after the
+// resource.
+//
+// Persistent rather than in-memory only: this is the shop's catalogue and its
+// orders, not a cache, and losing it on a restart would lose the shop.
+func constructRedisInstance(shop *shopv1.Shop) *unstructured.Unstructured {
+	redis := &unstructured.Unstructured{}
+	redis.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "redis.redis.opstreelabs.in",
+		Version: "v1beta2",
+		Kind:    "Redis",
+	})
+	redis.SetName(redisName(shop))
+	redis.SetNamespace(shop.Namespace)
+	redis.Object["spec"] = map[string]interface{}{
+		"kubernetesConfig": map[string]interface{}{
+			"image":           redisImage,
+			"imagePullPolicy": "IfNotPresent",
+		},
+		"storage": map[string]interface{}{
+			"volumeClaimTemplate": map[string]interface{}{
+				"spec": map[string]interface{}{
+					"accessModes": []interface{}{"ReadWriteOnce"},
+					"resources": map[string]interface{}{
+						"requests": map[string]interface{}{
+							"storage": databaseStorageSize,
+						},
+					},
+				},
+			},
+		},
+	}
+	return redis
+}
+
+func postgresName(shop *shopv1.Shop) string {
+	return fmt.Sprintf("%s-db", shop.Name)
+}
+
+func redisName(shop *shopv1.Shop) string {
+	return fmt.Sprintf("%s-redis", shop.Name)
 }
 
 func (r *ShopReconciler) reconcileAuthSecret(ctx context.Context, shop *shopv1.Shop) error {
@@ -311,13 +404,18 @@ func constructBackendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deplo
 	auth := fmt.Sprintf("%s-auth", shop.Name)
 	env := []corev1.EnvVar{
 		{Name: "PORT", Value: "3000"},
+		{Name: "DB_KIND", Value: shop.Spec.Database},
 		{Name: "WALLET_ADDRESS", Value: shop.Spec.WalletAddress},
 		{Name: "SHOP_ADMIN_USERNAME", Value: shop.Spec.AdminUsername},
 		{Name: "SHOP_ADMIN_PASSWORD", ValueFrom: secretKeyRef(auth, "SHOP_ADMIN_PASSWORD")},
 		{Name: "JWT_SECRET", ValueFrom: secretKeyRef(auth, "JWT_SECRET")},
 	}
-	if shop.Spec.Database == "postgresql" {
-		s := fmt.Sprintf("%s-db-app", shop.Name)
+
+	switch shop.Spec.Database {
+	case databasePostgres:
+		// CNPG publishes the credentials of the database it created in a secret
+		// named after the Cluster, the password is generated and this operator never sees it.
+		s := fmt.Sprintf("%s-app", postgresName(shop))
 		env = append(env,
 			corev1.EnvVar{Name: "DB_HOST", ValueFrom: secretKeyRef(s, "host")},
 			corev1.EnvVar{Name: "DB_PORT", ValueFrom: secretKeyRef(s, "port")},
@@ -325,12 +423,17 @@ func constructBackendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deplo
 			corev1.EnvVar{Name: "DB_PASSWORD", ValueFrom: secretKeyRef(s, "password")},
 			corev1.EnvVar{Name: "DB_NAME", ValueFrom: secretKeyRef(s, "dbname")},
 		)
+	case databaseRedis:
+		env = append(env,
+			corev1.EnvVar{Name: "REDIS_HOST", Value: redisName(shop)},
+			corev1.EnvVar{Name: "REDIS_PORT", Value: redisPort},
+		)
 	}
 	return deploymentFor(shop, name, shop.Spec.BackendImage, replicas, map[string]string{"app": name}, env)
 }
 
 // constructFrontendDeployment builds the shop's storefront. 
-// Note the address of the backend is not here.
+// Note the address of backend is not here.
 //
 // The Ingress publishes both halves of a shop under one host, so the storefront
 // addresses the backend with path-only URLs `/api/v1/articles` which the
@@ -367,8 +470,7 @@ func ingressBackend(svc string, port int32) networkingv1.IngressBackend {
 }
 
 // constructIngress publishes the whole shop under one host
-// `/api` goes to the backend, 
-// everything else to the storefront. 
+// `/api` goes to the backend, everything else to front.
 // nginx matches the longest path first, so the two paths do not compete
 //
 // One host for both halves is what makes the storefront's requests same-origin,

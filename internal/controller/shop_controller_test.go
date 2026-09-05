@@ -350,3 +350,86 @@ var _ = Describe("Shop Controller publishing a shop", func() {
 		Expect(shop.Status.URL).To(Equal("http://published-shop.localhost"))
 	})
 })
+
+// The backend keeps one implementation of its repositories per database and
+// chooses between them from DB_KIND, so the value it is handed has to be the
+// one the shop was created with, and it has to be given connection details for
+// that database and no other.
+var _ = Describe("Shop Controller choosing a database", func() {
+	const resourceName = "database-shop"
+
+	ctx := context.Background()
+
+	shopName := types.NamespacedName{Name: resourceName, Namespace: "default"}
+	backendName := types.NamespacedName{Name: resourceName + "-backend", Namespace: "default"}
+
+	deployShopOn := func(database string) corev1.Container {
+		resource := &shopv1.Shop{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
+			Spec: shopv1.ShopSpec{
+				Name:          "Prodavnica odece",
+				Availability:  "standard",
+				WalletAddress: "0x0000000000000000000000000000000000000004",
+				Database:      database,
+				BackendImage:  "slepimis120/devops-shop-backend:0.1.0",
+				FrontendImage: "slepimis120/devops-shop-frontend:0.1.0",
+			},
+		}
+		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+		reconciler := &ShopReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: shopName})
+		Expect(err).NotTo(HaveOccurred())
+
+		backend := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, backendName, backend)).To(Succeed())
+		return backend.Spec.Template.Spec.Containers[0]
+	}
+
+	AfterEach(func() {
+		shop := &shopv1.Shop{}
+		Expect(k8sClient.Get(ctx, shopName, shop)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, shop)).To(Succeed())
+
+		for _, component := range []string{"-backend", "-frontend"} {
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName + component, Namespace: "default"},
+			}
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, deployment))).To(Succeed())
+		}
+		ingress := &networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName + "-ingress", Namespace: "default"},
+		}
+		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, ingress))).To(Succeed())
+	})
+
+	It("points a standard shop at the PostgreSQL its CNPG cluster publishes", func() {
+		container := deployShopOn("postgresql")
+
+		Expect(envValueOf(container, "DB_KIND")).To(Equal("postgresql"))
+		// CNPG generates the password, so every credential is read from the
+		// secret it publishes rather than from anything the operator knows.
+		for _, name := range []string{"DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_NAME"} {
+			Expect(declaresEnv(container, name)).To(BeTrue(), name)
+		}
+		Expect(declaresEnv(container, "REDIS_HOST")).To(BeFalse())
+	})
+
+	It("points a light shop at the Service its Redis is served on", func() {
+		container := deployShopOn("redis")
+
+		Expect(envValueOf(container, "DB_KIND")).To(Equal("redis"))
+		Expect(envValueOf(container, "REDIS_HOST")).To(Equal(resourceName + "-redis"))
+		Expect(envValueOf(container, "REDIS_PORT")).To(Equal("6379"))
+		Expect(declaresEnv(container, "DB_HOST")).To(BeFalse())
+	})
+
+	// Neither database operator is installed in envtest, which is the same
+	// situation as a cluster running only one of them: the shop still has to be
+	// deployed, and wait for a database rather than never being reconciled.
+	It("deploys the shop even when the database operator is missing", func() {
+		container := deployShopOn("redis")
+
+		Expect(container.Image).To(Equal("slepimis120/devops-shop-backend:0.1.0"))
+	})
+})
