@@ -57,8 +57,12 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var shopBaseDomain string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metric endpoint binds to. "+
 		"Use the port :8080. If not set, it will be 0 in order to disable the metrics server")
+	flag.StringVar(&shopBaseDomain, "shop-base-domain", controller.DefaultBaseDomain,
+		"Domain suffix every shop is published under: a Shop named \"x\" is served at \"x.<domain>\". "+
+			"ShopHub has to be given the same value, since it builds the link to the shop.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
@@ -124,8 +128,9 @@ func main() {
 	}
 
 	if err = (&controller.ShopReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		BaseDomain: shopBaseDomain,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Shop")
 		os.Exit(1)

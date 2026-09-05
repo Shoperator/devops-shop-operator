@@ -25,10 +25,30 @@ import (
 	shopv1 "github.com/slepimis120/devops-shop-operator/api/v1"
 )
 
+// Browsers resolve every name under `localhost` to the loopback address by
+// themselves, so a shop created through ShopHub is reachable the moment it is
+// deployed
+const DefaultBaseDomain = "localhost"
+
 // ShopReconciler reconciles a Shop object
 type ShopReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// BaseDomain is the suffix every shop is published under: a Shop named
+	// "shop1" is served at "shop1.<BaseDomain>".
+	//
+	// This is the only place the operator knows about the outside world's
+	// addressing. ShopHub has to be told the same domain, since it builds the
+	// link available in dashboard.
+	BaseDomain string
+}
+
+func (r *ShopReconciler) baseDomain() string {
+	if r.BaseDomain == "" {
+		return DefaultBaseDomain
+	}
+	return r.BaseDomain
 }
 
 //+kubebuilder:rbac:groups=shop.shophub.local,resources=shops,verbs=get;list;watch;create;update;patch;delete
@@ -77,11 +97,12 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 	// ingress
-	if err := r.ensureCreated(ctx, shop, constructIngress(shop)); err != nil {
+	domain := r.baseDomain()
+	if err := r.ensureIngress(ctx, shop, constructIngress(shop, domain)); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	desiredURL := fmt.Sprintf("http://%s.shop.local", shop.Name)
+	desiredURL := fmt.Sprintf("http://%s.%s", shop.Name, domain)
 	if shop.Status.Status != "Running" || shop.Status.Replicas != replicas || shop.Status.URL != desiredURL {
 		shop.Status.Status = "Running"
 		shop.Status.Replicas = replicas
@@ -158,6 +179,31 @@ func (r *ShopReconciler) ensureDeployment(ctx context.Context, shop *shopv1.Shop
 		return nil
 	}
 	log.FromContext(ctx).Info("Updating Deployment to match the Shop", "Deployment", found.Name)
+	return r.Update(ctx, found)
+}
+
+// ensureIngress creates the Ingress that publishes the shop
+func (r *ShopReconciler) ensureIngress(ctx context.Context, shop *shopv1.Shop, desired *networkingv1.Ingress) error {
+	found := &networkingv1.Ingress{}
+	err := r.Get(ctx, client.ObjectKeyFromObject(desired), found)
+	if err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return err
+		}
+		if err := controllerutil.SetControllerReference(shop, desired, r.Scheme); err != nil {
+			return err
+		}
+		return r.Create(ctx, desired)
+	}
+
+	if equality.Semantic.DeepEqual(found.Spec.Rules, desired.Spec.Rules) &&
+		equality.Semantic.DeepEqual(found.Spec.IngressClassName, desired.Spec.IngressClassName) {
+		return nil
+	}
+
+	found.Spec.Rules = desired.Spec.Rules
+	found.Spec.IngressClassName = desired.Spec.IngressClassName
+	log.FromContext(ctx).Info("Updating Ingress to match the Shop", "Ingress", found.Name)
 	return r.Update(ctx, found)
 }
 
@@ -283,12 +329,17 @@ func constructBackendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deplo
 	return deploymentFor(shop, name, shop.Spec.BackendImage, replicas, map[string]string{"app": name}, env)
 }
 
+// constructFrontendDeployment builds the shop's storefront. 
+// Note the address of the backend is not here.
+//
+// The Ingress publishes both halves of a shop under one host, so the storefront
+// addresses the backend with path-only URLs `/api/v1/articles` which the
+// browser resolves against whatever host the customer reached the shop on.
 func constructFrontendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
 	name := fmt.Sprintf("%s-frontend", shop.Name)
 	env := []corev1.EnvVar{
 		{Name: "PORT", Value: "3000"},
 		{Name: "HOSTNAME", Value: "0.0.0.0"},
-		{Name: "NEXT_PUBLIC_API_URL", Value: fmt.Sprintf("http://%s.shop.local", shop.Name)},
 		{Name: "NEXT_PUBLIC_SHOP_NAME", Value: shop.Spec.Name},
 	}
 	return deploymentFor(shop, name, shop.Spec.FrontendImage, replicas, map[string]string{"app": name}, env)
@@ -315,7 +366,14 @@ func ingressBackend(svc string, port int32) networkingv1.IngressBackend {
 	}
 }
 
-func constructIngress(shop *shopv1.Shop) *networkingv1.Ingress {
+// constructIngress publishes the whole shop under one host
+// `/api` goes to the backend, 
+// everything else to the storefront. 
+// nginx matches the longest path first, so the two paths do not compete
+//
+// One host for both halves is what makes the storefront's requests same-origin,
+// so no CORS is involved and the storefront needs no address of its own.
+func constructIngress(shop *shopv1.Shop, baseDomain string) *networkingv1.Ingress {
 	pathType := networkingv1.PathTypePrefix
 	ingressClass := "nginx"
 	return &networkingv1.Ingress{
@@ -323,7 +381,7 @@ func constructIngress(shop *shopv1.Shop) *networkingv1.Ingress {
 		Spec: networkingv1.IngressSpec{
 			IngressClassName: &ingressClass,
 			Rules: []networkingv1.IngressRule{{
-				Host: fmt.Sprintf("%s.shop.local", shop.Name),
+				Host: fmt.Sprintf("%s.%s", shop.Name, baseDomain),
 				IngressRuleValue: networkingv1.IngressRuleValue{
 					HTTP: &networkingv1.HTTPIngressRuleValue{
 						Paths: []networkingv1.HTTPIngressPath{
