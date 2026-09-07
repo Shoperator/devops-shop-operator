@@ -14,17 +14,23 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       
       - name: Set up Go
-        uses: actions/setup-go@v4
+        # Ahead of the version in go.mod on purpose: the setup-envtest release
+        # the Makefile pins needs Go 1.24 to install, and the operator itself
+        # builds fine on a newer toolchain.
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.22'
+          go-version: '1.24'
       
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # v7 and up run golangci-lint v2 only, which is why .golangci.yml is in
+        # the v2 format. Pinned rather than `latest`: a new release must not be
+        # able to fail a pull request that changed nothing.
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.13.2
           args: --timeout=5m
       
       - name: Run tests
@@ -40,7 +46,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
       
