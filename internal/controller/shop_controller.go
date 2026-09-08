@@ -414,6 +414,10 @@ func constructBackendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deplo
 		{Name: "SHOP_ADMIN_USERNAME", Value: shop.Spec.AdminUsername},
 		{Name: "SHOP_ADMIN_PASSWORD", ValueFrom: secretKeyRef(auth, "SHOP_ADMIN_PASSWORD")},
 		{Name: "JWT_SECRET", ValueFrom: secretKeyRef(auth, "JWT_SECRET")},
+		{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: "http://tempo.tracing.svc.cluster.local:4318"},
+		{Name: "OTEL_EXPORTER_OTLP_PROTOCOL", Value: "http/protobuf"},
+		{Name: "OTEL_SERVICE_NAME", Value: name},
+		{Name: "OTEL_RESOURCE_ATTRIBUTES", Value: fmt.Sprintf("service.namespace=%s,shop=%s", shop.Namespace, shop.Name)},
 	}
 
 	switch shop.Spec.Database {
@@ -449,6 +453,10 @@ func constructFrontendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Depl
 		{Name: "PORT", Value: "3000"},
 		{Name: "HOSTNAME", Value: "0.0.0.0"},
 		{Name: "NEXT_PUBLIC_SHOP_NAME", Value: shop.Spec.Name},
+		{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: "http://tempo.tracing.svc.cluster.local:4318"},
+		{Name: "OTEL_EXPORTER_OTLP_PROTOCOL", Value: "http/protobuf"},
+		{Name: "OTEL_SERVICE_NAME", Value: name},
+		{Name: "OTEL_RESOURCE_ATTRIBUTES", Value: fmt.Sprintf("service.namespace=%s,shop=%s", shop.Namespace, shop.Name)},
 	}
 	return deploymentFor(shop, name, shop.Spec.FrontendImage, replicas, map[string]string{appLabel: name}, env)
 }
