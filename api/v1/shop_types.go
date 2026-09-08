@@ -26,13 +26,19 @@ type ShopSpec struct {
 	Database string `json:"database"`
 
 	// Container image for the shop backend (NestJS)
+	//
+	// ShopHub does not send this, so the default is what every shop it creates
+	// actually runs -- and it is pinned rather than left at `latest` so a shop
+	// deployed today can be deployed again tomorrow and be the same shop.
+	// Publishing a new image is therefore not enough on its own: this default
+	// has to move with it, and the operator chart has to be republished.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default="slepimis120/devops-shop-backend:0.1.0"
+	// +kubebuilder:default="slepimis120/devops-shop-backend:0.2.0"
 	BackendImage string `json:"backendImage,omitempty"`
 
 	// Container image for the shop frontend (Next.js)
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default="slepimis120/devops-shop-frontend:0.1.0"
+	// +kubebuilder:default="slepimis120/devops-shop-frontend:0.2.0"
 	FrontendImage string `json:"frontendImage,omitempty"`
 
 	// Admin username seeded in the shop backend

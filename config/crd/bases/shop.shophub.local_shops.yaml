@@ -66,8 +66,9 @@ spec:
                 - high
                 type: string
               backendImage:
-                default: slepimis120/devops-shop-backend:0.1.0
-                description: Container image for the shop backend (NestJS)
+                default: slepimis120/devops-shop-backend:0.2.0
+                description: |-
+                  Container image for the shop backend (NestJS)
                 type: string
               database:
                 description: 'Database type: "postgresql" or "redis"'
@@ -76,7 +77,7 @@ spec:
                 - redis
                 type: string
               frontendImage:
-                default: slepimis120/devops-shop-frontend:0.1.0
+                default: slepimis120/devops-shop-frontend:0.2.0
                 description: Container image for the shop frontend (Next.js)
                 type: string
               name:
