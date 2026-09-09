@@ -30,6 +30,25 @@ import (
 // deployed
 const DefaultBaseDomain = "localhost"
 
+// Chain settings every shop in the cluster shares.
+//
+// They are operator-level rather than fields on ShopSpec because the chain is a
+// property of the cluster, not of a shop: all shops in one deployment settle on
+// the same network, and putting them in the spec would mean a CRD change and
+// two more fields in ShopHub's forms for a value nobody would ever vary.
+//
+// The defaults describe Anvil, the local development chain.
+const (
+	// DefaultRPCURL is where the shop's *backend* verifies payments. It is a
+	// Service name, reachable from inside the cluster only; the customer's
+	// wallet holds a connection of its own and never sees this.
+	DefaultRPCURL = "http://anvil.default.svc.cluster.local:8545"
+
+	// DefaultChainID is Anvil's. The storefront asks the wallet to switch to it
+	// before signing, so it has to match the network the customer added.
+	DefaultChainID = "31337"
+)
+
 // The two databases a shop can be created with. ShopHub offers them as
 // `standard` and `light`; these are the values that reach the Shop resource,
 // and they are passed to the shop's backend as `DB_KIND` unchanged.
@@ -63,6 +82,12 @@ type ShopReconciler struct {
 	// addressing. ShopHub has to be told the same domain, since it builds the
 	// link available in dashboard.
 	BaseDomain string
+
+	// RPCURL is the JSON-RPC endpoint every shop's backend verifies payments
+	// through, and ChainID is the network the storefront asks the customer's
+	// wallet to switch to. Both are cluster-wide, see the constants above.
+	RPCURL  string
+	ChainID string
 }
 
 func (r *ShopReconciler) baseDomain() string {
@@ -70,6 +95,20 @@ func (r *ShopReconciler) baseDomain() string {
 		return DefaultBaseDomain
 	}
 	return r.BaseDomain
+}
+
+func (r *ShopReconciler) rpcURL() string {
+	if r.RPCURL == "" {
+		return DefaultRPCURL
+	}
+	return r.RPCURL
+}
+
+func (r *ShopReconciler) chainID() string {
+	if r.ChainID == "" {
+		return DefaultChainID
+	}
+	return r.ChainID
 }
 
 //+kubebuilder:rbac:groups=shop.shophub.local,resources=shops,verbs=get;list;watch;create;update;patch;delete
@@ -105,7 +144,7 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// backend
-	if err := r.ensureDeployment(ctx, shop, constructBackendDeployment(shop, replicas), replicas); err != nil {
+	if err := r.ensureDeployment(ctx, shop, r.constructBackendDeployment(shop, replicas), replicas); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.ensureCreated(ctx, shop, constructService(shop, "backend")); err != nil {
@@ -404,13 +443,21 @@ func deploymentFor(shop *shopv1.Shop, name, image string, replicas int32, labels
 	}
 }
 
-func constructBackendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
+// constructBackendDeployment builds the shop's backend.
+//
+// A method rather than a plain function: the chain settings it puts in the
+// environment belong to the operator, not to the Shop resource. The storefront
+// needs no chain settings of its own — it reads them back from this backend's
+// /payment-config, which keeps one image serving every shop.
+func (r *ShopReconciler) constructBackendDeployment(shop *shopv1.Shop, replicas int32) *appsv1.Deployment {
 	name := fmt.Sprintf("%s-backend", shop.Name)
 	auth := fmt.Sprintf("%s-auth", shop.Name)
 	env := []corev1.EnvVar{
 		{Name: "PORT", Value: "3000"},
 		{Name: "DB_KIND", Value: shop.Spec.Database},
 		{Name: "WALLET_ADDRESS", Value: shop.Spec.WalletAddress},
+		{Name: "RPC_URL", Value: r.rpcURL()},
+		{Name: "CHAIN_ID", Value: r.chainID()},
 		{Name: "SHOP_ADMIN_USERNAME", Value: shop.Spec.AdminUsername},
 		{Name: "SHOP_ADMIN_PASSWORD", ValueFrom: secretKeyRef(auth, "SHOP_ADMIN_PASSWORD")},
 		{Name: "JWT_SECRET", ValueFrom: secretKeyRef(auth, "JWT_SECRET")},
