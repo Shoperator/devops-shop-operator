@@ -4,14 +4,24 @@ on:
   push:
     branches:
       - main
+    tags: ['v*.*.*']
   pull_request:
     branches:
       - main
 
+env:
+  IMAGE_NAME: slepimis120/devops-shop-operator
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-build:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -42,14 +52,17 @@ jobs:
   docker-build-push:
     runs-on: ubuntu-latest
     needs: lint-and-build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+    # Objavljuje samo tag, ne svaki merge u main: verzija slike je onda ista ona
+    # koju CRD default (`shop_types.go`) i values.yaml pominju, umesto SHA-a koji
+    # niko ne moze da upise unapred.
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
@@ -61,10 +74,8 @@ jobs:
       
       - name: Get version
         id: version
-        run: |
-          VERSION=$(git describe --tags --always --abbrev=7)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-      
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -73,7 +84,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            slepimis120/devops-shop-operator:${{ steps.version.outputs.version }}
-            slepimis120/devops-shop-operator:latest
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

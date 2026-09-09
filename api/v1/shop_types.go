@@ -33,12 +33,12 @@ type ShopSpec struct {
 	// Publishing a new image is therefore not enough on its own: this default
 	// has to move with it, and the operator chart has to be republished.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default="slepimis120/devops-shop-backend:0.2.0"
+	// +kubebuilder:default="slepimis120/devops-shop-backend:0.3.0"
 	BackendImage string `json:"backendImage,omitempty"`
 
 	// Container image for the shop frontend (Next.js)
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default="slepimis120/devops-shop-frontend:0.2.0"
+	// +kubebuilder:default="slepimis120/devops-shop-frontend:0.3.0"
 	FrontendImage string `json:"frontendImage,omitempty"`
 
 	// Admin username seeded in the shop backend
