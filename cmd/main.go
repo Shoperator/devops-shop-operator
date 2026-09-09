@@ -58,8 +58,16 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var shopBaseDomain string
+	var shopRPCURL string
+	var shopChainID string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metric endpoint binds to. "+
 		"Use the port :8080. If not set, it will be 0 in order to disable the metrics server")
+	flag.StringVar(&shopRPCURL, "rpc-url", controller.DefaultRPCURL,
+		"JSON-RPC endpoint every shop's backend verifies payments through. Reachable from inside "+
+			"the cluster only; the customer's wallet holds its own connection to the chain.")
+	flag.StringVar(&shopChainID, "chain-id", controller.DefaultChainID,
+		"EIP-155 chain id of the network shops settle on. The storefront asks the customer's "+
+			"wallet to switch to it, so it has to match the network they added.")
 	flag.StringVar(&shopBaseDomain, "shop-base-domain", controller.DefaultBaseDomain,
 		"Domain suffix every shop is published under: a Shop named \"x\" is served at \"x.<domain>\". "+
 			"ShopHub has to be given the same value, since it builds the link to the shop.")
@@ -131,6 +139,8 @@ func main() {
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
 		BaseDomain: shopBaseDomain,
+		RPCURL:     shopRPCURL,
+		ChainID:    shopChainID,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Shop")
 		os.Exit(1)
